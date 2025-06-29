@@ -4,14 +4,18 @@ import { PromotionController } from './promotion.controller';
 import { PromotionStateService } from './services/promotion-state.service';
 import { MessageQueueService } from './services/message-queue.service';
 import { ConnectionManagerModule } from '../connection-manager/connection-manager.module';
+import { ActiveChannelsModule } from '../active-channels';
+import { PromoteMsgModule } from '../promote-msgs';
 
 @Module({
   imports: [
     forwardRef(() => ConnectionManagerModule),
+    ActiveChannelsModule,
+    PromoteMsgModule
   ],
   controllers: [PromotionController],
   providers: [
-    PromotionStateService,    // Singleton state management
+    PromotionStateService, 
     MessageQueueService,      // Singleton message queue management
     PromotionService,         // Main service that orchestrates everything
   ],

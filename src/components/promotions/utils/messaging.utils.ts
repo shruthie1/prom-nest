@@ -141,7 +141,7 @@ export async function sendPromotionalMessage(
   channelInfo: IChannel,
   state: PromotionState,
   forceEven: boolean = false
-): Promise<Api.Message | undefined> {
+): Promise<{ sentMessage: Api.Message | undefined; randomIndex: string }> {
   let sentMessage: Api.Message | undefined;
   const randomIndex = selectRandomElements(channelInfo.availableMsgs || ['0'], 1)[0] || '0';
   let endMsg = state.promoteMsgs[randomIndex] || state.promoteMsgs['0'];
@@ -163,5 +163,5 @@ export async function sendPromotionalMessage(
     sentMessage = await sendMessageToChannel(client, mobile, channelInfo, state, { message: endMsg });
   }
 
-  return sentMessage;
+  return { sentMessage, randomIndex};
 }

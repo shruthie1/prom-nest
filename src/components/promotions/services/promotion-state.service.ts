@@ -1,10 +1,15 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PromotionState, PromotionConfig, IClientDetails, PromotionResult, MobileStats } from '../interfaces/promotion.interfaces';
 import { getRandomStartIndex, shuffleArrayWithMobileSeed } from '../utils/shuffle.utils';
+import { PromoteMsgsService } from 'src/components/promote-msgs/promote-msgs.service';
 
 @Injectable()
 export class PromotionStateService {
   private readonly logger = new Logger(PromotionStateService.name);
+
+  constructor(
+    private readonly promoteMsgsService: PromoteMsgsService, // Assuming this service is defined elsewhere
+  ) {}
 
   private readonly DEFAULT_CONFIG: PromotionConfig = {
     messageCheckDelay: 10000,
@@ -65,10 +70,9 @@ export class PromotionStateService {
       throw new Error(`No promotion state found for mobile: ${mobile}`);
     }
     try {
-      // Note: You would need to inject the database service
-      // const db = this.databaseService.getInstance();
-      // state.promoteMsgs = await db.getPromoteMsgs();
-      state.promoteMsgs = { '0': 'Heyy Boiis' }; // Fallback
+      const availableMsgs = await this.promoteMsgsService.findOne();
+      delete availableMsgs['_id']
+      state.promoteMsgs = availableMsgs || { '0': 'Heyy Boiis' }; // Fallback
       this.logger.log(`[${mobile}] Promotion messages loaded: ${Object.keys(state.promoteMsgs).length} messages`);
     } catch (error) {
       this.logger.error(`[${mobile}] Failed to initialize promotion state:`, error);
@@ -119,22 +123,18 @@ export class PromotionStateService {
   }
 
   isChannelBanned(mobile: string, channelId: string): boolean {
-    this.logger.log(`[${mobile}] Checking if channel is banned: ${channelId}`);
     const state = this.mobilePromotionStates.get(mobile);
     if (!state) {
       throw new Error(`No promotion state found for mobile: ${mobile}`);
     }
     if (!state.promotionResults.has(channelId)) {
-      this.logger.log(`[${mobile}] Channel not exists in results: ${channelId}`);
       return false;
     }
     const result = state.promotionResults.get(channelId);
     if (result.success) {
-      this.logger.log(`[${mobile}] No promotion result found for channel: ${channelId}`);
       return false;
     }
     if (!result.success && result.lastCheckTimestamp > Date.now() - (3 * 24 * 60 * 60 * 1000)) {
-      this.logger.log(`[${mobile}] Channel is banned based on Prev Result: ${channelId}`);
       return true;
     }
     return false;

@@ -7,30 +7,27 @@ import { ConnectionManagerService } from '../connection-manager/connection-manag
 
 // Import utility functions
 import { sendPromotionalMessage } from './utils/messaging.utils';
-import { getChannelInfo } from './utils/channel.utils';
+import { getIChannelFromTg } from './utils/channel.utils';
 import { fetchDialogs } from './utils/dialogs.utils';
-import { checkTelegramHealth, isClientHealthyForPromotion } from './utils/health.utils';
+import { checkTelegramHealth } from './utils/health.utils';
+import { ActiveChannelsService } from '../active-channels';
 
 @Injectable()
 export class PromotionService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PromotionService.name);
   private isPromotionRunning = false;
   private promotionLoop: NodeJS.Timeout | null = null;
-  private readonly PROMOTION_INTERVAL = 5000; // 5 seconds
-
-  // Auto-save interval for persistence
+  private readonly PROMOTION_INTERVAL = 5000;
   private autoSaveInterval: NodeJS.Timeout | null = null;
-  private readonly AUTO_SAVE_INTERVAL = 5 * 60 * 1000; // Save every 5 minutes
-
-  // Sync interval for connection manager
+  private readonly AUTO_SAVE_INTERVAL = 5 * 60 * 1000;
   private syncInterval: NodeJS.Timeout | null = null;
-  private readonly SYNC_INTERVAL = 10 * 1000; // Sync every 2 minutes
 
   constructor(
     private readonly promotionStateService: PromotionStateService,
     private readonly messageQueueService: MessageQueueService,
     @Inject(forwardRef(() => ConnectionManagerService))
     private readonly connectionManagerService: ConnectionManagerService,
+    private readonly activeChannelsService: ActiveChannelsService,
   ) {}
 
   async onModuleInit() {
@@ -229,7 +226,7 @@ export class PromotionService implements OnModuleInit, OnModuleDestroy {
 
     // Get current channel
     const currentChannelId = state.channels[state.channelIndex];
-    const channelInfo = await getChannelInfo(client, currentChannelId);
+    const channelInfo = await this.getChannelInfo(client, currentChannelId);
 
     if (!channelInfo) {
       this.logger.warn(`[${mobile}] Could not get channel info for ${currentChannelId}`);
@@ -251,7 +248,7 @@ export class PromotionService implements OnModuleInit, OnModuleDestroy {
     try {
       const result = await sendPromotionalMessage(client, mobile, channelInfo, state);
 
-      if (result) {
+      if (result.sentMessage) {
         // Update state on success
         this.promotionStateService.updateLastMessageTime(mobile);
         this.promotionStateService.incrementSuccessCount(mobile);
@@ -260,9 +257,9 @@ export class PromotionService implements OnModuleInit, OnModuleDestroy {
         // Add to message queue for checking
         this.messageQueueService.addToQueue(mobile, {
           channelId: currentChannelId,
-          messageId: result.id,
+          messageId: result.sentMessage.id,
           timestamp: Date.now(),
-          messageIndex: state.channelIndex.toString()
+          messageIndex: result.randomIndex,
         });
       } else {
         // Update state on failure
@@ -337,7 +334,7 @@ export class PromotionService implements OnModuleInit, OnModuleDestroy {
           activeTelegramClients: this.connectionManagerService.getActiveTelegramClients().size,
           activeConnections: activeConnections.length,
         },
-        rotationManager:{
+        rotationManager: {
           totalMobiles: this.promotionStateService.getAllMobileStates().size,
           healthyMobiles: this.promotionStateService.getHealthyMobiles().length,
         },
@@ -457,6 +454,21 @@ export class PromotionService implements OnModuleInit, OnModuleDestroy {
       this.logger.log('Sync with connection manager completed');
     } catch (error) {
       this.logger.error('Error syncing with connection manager:', error);
+    }
+  }
+
+  async getChannelInfo(client: TelegramClient, channelId: string): Promise<IChannel | null> {
+    try {
+      let channelInfo: IChannel = await this.activeChannelsService.findOne(channelId);
+      if (!channelInfo) {
+        console.log(`Channel ${channelId} not found in DB. Fetching from Telegram...`);
+        channelInfo = await getIChannelFromTg(client, channelId);
+        await this.activeChannelsService.update(channelId, channelInfo);
+      }
+      return channelInfo;
+    } catch (error) {
+      console.error(`Error getting channel info for ${channelId}:`, error);
+      return null;
     }
   }
 }

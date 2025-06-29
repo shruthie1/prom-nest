@@ -2,8 +2,9 @@ import { forwardRef, Inject, Injectable, Logger } from '@nestjs/common';
 import { TelegramClient } from 'telegram';
 import { MessageQueueItem, PromotionState } from '../interfaces/promotion.interfaces';
 import { PromotionStateService } from './promotion-state.service';
-import { checkMessageExist } from '../utils/message-queue.utils';
 import { ConnectionManagerService } from 'src/components/connection-manager';
+import { ActiveChannelsService } from 'src/components/active-channels';
+import { fetchWithTimeout, ppplbot } from 'src/utils';
 
 @Injectable()
 export class MessageQueueService {
@@ -13,6 +14,7 @@ export class MessageQueueService {
     private readonly promotionStateService: PromotionStateService,
     @Inject(forwardRef(() => ConnectionManagerService))
     private readonly connectionManagerService: ConnectionManagerService,
+    private readonly activeChannelsService: ActiveChannelsService
   ) {}
   private readonly MAX_QUEUE_SIZE = 1000;
   private readonly MESSAGE_CHECK_DELAY = 10000; // 10 seconds
@@ -45,7 +47,7 @@ export class MessageQueueService {
           continue;
         }
         try {
-          await checkMessageExist(client, item, mobile);
+          await this.checkMessageExist(client, item, mobile);
           processedIndices.add(index);
         } catch (error) {
           this.logger.error(`[${mobile}] Error checking message ${item.messageId}:`, error);
@@ -104,5 +106,47 @@ export class MessageQueueService {
       mobile,
       queueSize: this.getQueueSize(mobile)
     }));
+  }
+
+  async checkMessageExist(
+    client: TelegramClient,
+    messageItem: MessageQueueItem,
+    mobile: string
+  ): Promise<void> {
+    try {
+      const result = await client.getMessages(messageItem.channelId, { minId: messageItem.messageId - 2 });
+      if (result.length > 0 && result[0] && result[0].id === messageItem.messageId) {
+        await this.handleExistingMessage(messageItem.channelId, messageItem.messageIndex, result[0].id, mobile);
+      } else {
+        await this.handleDeletedMessage(messageItem.channelId, messageItem.messageIndex, messageItem.messageId, mobile);
+      }
+    } catch (error) {
+      console.error(`[${mobile}] Error checking message ${messageItem.messageId} in ${messageItem.channelId}: ${error.message}`);
+    }
+  }
+
+  async handleDeletedMessage(channelId: string, messageIndex: string, messageId: number, mobile: string) {
+    if (messageIndex == '0') {
+      const channelInfo = await this.activeChannelsService.findOne(channelId);
+      if (channelInfo.availableMsgs.length < 1) {
+        console.log(`[${mobile}]  Setting channel ${channelId} as banned because messageIndex is '0'`);
+        await this.activeChannelsService.update(channelId, { banned: true });
+        console.log(`[${mobile}] Channel ${channelId} is now banned.`);
+        await fetchWithTimeout(`${ppplbot()}&text=@${(process.env.clientId).toUpperCase()}-PROM: Channel ${channelId} is now banned.`);
+      }
+    } else {
+      const result = await this.activeChannelsService.removeFromAvailableMsgs(channelId, messageIndex);
+      console.log(`[${mobile}] Message Deleted ${messageIndex} from channel ${channelId} messagesId: ${messageId}`);
+      await fetchWithTimeout(`${ppplbot()}&text=@${(process.env.clientId).toUpperCase()}-PROM: [${mobile}] message Deleted ${messageIndex} from channel ${channelId} as messageId : ${messageId}`);
+    }
+  }
+
+  async handleExistingMessage(channelId: string, messageIndex: string, messageId: number, mobile: string) {
+    console.log(`[${mobile}]  Message EXISTS for channelId: ${channelId}, messageIndex: ${messageIndex}, messageId: ${messageId}`);
+    if (messageIndex) {
+      const result = await this.activeChannelsService.update(channelId, { lastMessageTime: Date.now() });
+    } else {
+      console.log(`No message index provided for channel ${channelId}`);
+    }
   }
 }

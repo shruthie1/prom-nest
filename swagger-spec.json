@@ -218,6 +218,44 @@
           "Promotion"
         ]
       }
+    },
+    "/promote-msgs": {
+      "get": {
+        "operationId": "PromoteMsgsController_findOne",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "summary": "Get promote-msgs data",
+        "tags": [
+          "Promote-msgs"
+        ]
+      },
+      "patch": {
+        "operationId": "PromoteMsgsController_update",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "summary": "Update promote-msgs",
+        "tags": [
+          "Promote-msgs"
+        ]
+      }
     }
   },
   "info": {
@@ -229,6 +267,11 @@
   "tags": [],
   "servers": [],
   "components": {
-    "schemas": {}
+    "schemas": {
+      "Object": {
+        "type": "object",
+        "properties": {}
+      }
+    }
   }
 }
