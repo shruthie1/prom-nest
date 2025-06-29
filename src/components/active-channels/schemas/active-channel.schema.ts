@@ -84,7 +84,15 @@ export class ActiveChannel {
 
   @ApiProperty({ default: false })
   @Prop({ default: false })
-  forbidden: boolean
+  forbidden: boolean;
+
+  @ApiProperty({ type: Number, required: false })
+  @Prop({ type: Number, required: false, default: 0 })
+  lastMessageTime: number;
+
+  @ApiProperty({ type: Number, required: false })
+  @Prop({ type: Number, required: false, default: 0 })
+  lastMessageId: number;
 }
 
 export const ActiveChannelSchema = SchemaFactory.createForClass(ActiveChannel);
