@@ -1,0 +1,90 @@
+name: Build, Deploy and Publish
+
+on:
+  push:
+    branches:
+      - '*'
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-and-publish:
+    name: Build, Deploy and Publish
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18
+          registry-url: "https://registry.npmjs.org/"
+
+      - name: Install Dependencies
+        run: npm install
+
+      - name: Build NestJS app
+        run: npm run build
+
+      - name: Build Webpack
+        run: npm run build:webpack
+
+      - name: Determine branch name
+        id: branch_name
+        run: |
+          echo "BRANCH_NAME=$(git rev-parse --abbrev-ref HEAD)" >> $GITHUB_ENV
+          echo "branch=$(echo $GITHUB_REF | awk -F'/' '{print $3}')" >> $GITHUB_OUTPUT
+
+      - name: Upload to Cloudinary
+        run: npm run upload-cloudinary -- ${{ env.BRANCH_NAME }}
+        env:
+          CL_NAME: ${{ secrets.CL_NAME }}
+          CL_APIKEY: ${{ secrets.CL_APIKEY }}
+          CL_APISECRET: ${{ secrets.CL_APISECRET }}
+
+      - name: Configure Git
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+
+      - name: Update Current Branch
+        run: |
+          git pull origin ${{ steps.branch_name.outputs.branch }}
+          git diff --quiet || (git add . && git commit -m "chore: commit pre-bump changes")
+          npm version patch -m "Bump version to %s [skip ci]"
+          git add src dist package.json
+          git commit -m "Build and deploy dist files" || echo "No changes to commit"
+          git push origin HEAD:${{ steps.branch_name.outputs.branch }}
+
+      - name: Update Master Branch
+        if: ${{ github.ref != 'refs/heads/master' }}
+        run: |
+          git fetch origin master
+          git checkout master
+          git pull origin master
+          git checkout ${{ steps.branch_name.outputs.branch }} -- src dist
+          git add src dist package.json
+          git commit -m "Update dist and src from ${{ steps.branch_name.outputs.branch }}" || echo "No changes to commit"
+          git push origin master -f
+
+      - name: Configure NPM Authentication
+        if: success()
+        run: |
+          echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc
+          chmod 0600 ~/.npmrc
+
+      - name: Verify NPM Authentication
+        if: success()
+        run: npm whoami
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish to NPM
+        if: success()
+        run: npm publish --access public
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
