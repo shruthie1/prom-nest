@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, OnModuleDestroy, forwardRef, Inject } from '@nestjs/common';
 import { TelegramClient } from 'telegram';
 import { IClientDetails, PromotionState, IChannel } from './interfaces/promotion.interfaces';
 import { PromotionStateService } from './services/promotion-state.service';
@@ -16,15 +16,20 @@ export class PromotionService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PromotionService.name);
   private isPromotionRunning = false;
   private promotionLoop: NodeJS.Timeout | null = null;
-  private readonly PROMOTION_INTERVAL = 10000; // 10 seconds
+  private readonly PROMOTION_INTERVAL = 5000; // 5 seconds
 
   // Auto-save interval for persistence
   private autoSaveInterval: NodeJS.Timeout | null = null;
   private readonly AUTO_SAVE_INTERVAL = 5 * 60 * 1000; // Save every 5 minutes
 
+  // Sync interval for connection manager
+  private syncInterval: NodeJS.Timeout | null = null;
+  private readonly SYNC_INTERVAL = 10 * 1000; // Sync every 2 minutes
+
   constructor(
     private readonly promotionStateService: PromotionStateService,
     private readonly messageQueueService: MessageQueueService,
+    @Inject(forwardRef(() => ConnectionManagerService))
     private readonly connectionManagerService: ConnectionManagerService,
   ) {}
 
@@ -36,8 +41,6 @@ export class PromotionService implements OnModuleInit, OnModuleDestroy {
   async onModuleDestroy() {
     this.logger.log('PromotionService shutting down - Saving all results');
     this.stopPromotion();
-    
-    // Save all results before shutdown
     try {
       await this.promotionStateService.saveAllResults();
       this.logger.log('All results saved successfully during shutdown');
@@ -49,11 +52,11 @@ export class PromotionService implements OnModuleInit, OnModuleDestroy {
   private async initializeClientsAndStartPromotion(): Promise<void> {
     try {
       // Get all managed mobiles from connection manager
-      const managedMobiles = this.connectionManagerService.getManagedMobiles();
-      this.logger.log(`Found ${managedMobiles.length} managed mobiles: ${managedMobiles.join(', ')}`);
+      const activeConnections = this.connectionManagerService.getActiveConnections();
+      this.logger.log(`Found ${activeConnections.length} managed mobiles: ${activeConnections.join(', ')}`);
 
       // Initialize states for each client
-      for (const mobile of managedMobiles) {
+      for (const mobile of activeConnections) {
         await this.initializeClientState(mobile);
       }
 
@@ -110,6 +113,7 @@ export class PromotionService implements OnModuleInit, OnModuleDestroy {
     this.promotionLoop = setInterval(async () => {
       try {
         await this.promoteInBatches();
+        await this.messageQueueService.checkQueuedMessages();
       } catch (error) {
         this.logger.error('Error in global promotion loop:', error);
       }
@@ -131,49 +135,61 @@ export class PromotionService implements OnModuleInit, OnModuleDestroy {
       clearInterval(this.promotionLoop);
       this.promotionLoop = null;
     }
-    
+
     if (this.autoSaveInterval) {
       clearInterval(this.autoSaveInterval);
       this.autoSaveInterval = null;
     }
-    
+
+    if (this.syncInterval) {
+      clearInterval(this.syncInterval);
+      this.syncInterval = null;
+    }
+
     this.isPromotionRunning = false;
     this.logger.log('Global promotion system stopped');
   }
 
   private async promoteInBatches(): Promise<void> {
     const healthyMobiles = this.promotionStateService.getHealthyMobiles();
-    
+
     if (healthyMobiles.length === 0) {
       return;
     }
-
-    this.logger.log(`Processing ${healthyMobiles.length} healthy mobiles`);
-
     // Process up to 3 mobiles concurrently to avoid overwhelming the system
     const batches = this.chunkArray(healthyMobiles, 3);
-    
+
     for (const batch of batches) {
       await Promise.allSettled(
-        batch.map(mobile => this.promoteForMobile(mobile))
+        batch.map((mobile, index) =>
+          // Add staggered delay (0-2 seconds) to prevent simultaneous channel access
+          this.promoteForMobileWithDelay(mobile, index * 500)
+        )
       );
     }
   }
 
+  private async promoteForMobileWithDelay(mobile: string, delay: number): Promise<void> {
+    // Add small random delay to stagger mobile promotion timing
+    if (delay > 0) {
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+    return this.promoteForMobile(mobile);
+  }
+
   private async promoteForMobile(mobile: string): Promise<void> {
     try {
-      const client = this.connectionManagerService.getTelegramClient(mobile);
+      const client = await this.connectionManagerService.getTelegramClient(mobile);
       const state = this.promotionStateService.getPromotionStateByMobile(mobile);
 
       if (!client || !state) {
         this.logger.warn(`Missing client or state for mobile: ${mobile}`);
         return;
       }
-
-      // Check if client is healthy for promotion
-      if (!isClientHealthyForPromotion(state, mobile)) {
-        return;
-      }
+      // // Check if client is healthy for promotion
+      // if (!isClientHealthyForPromotion(state, mobile)) {
+      //   return;
+      // }
 
       // Check Telegram health periodically
       const isHealthy = await checkTelegramHealth(client, state, mobile);
@@ -195,11 +211,6 @@ export class PromotionService implements OnModuleInit, OnModuleDestroy {
           return;
         }
       }
-
-      // Process message queue
-      await this.messageQueueService.checkQueuedMessages(client, state, mobile);
-
-      // Send promotional message
       await this.sendPromotionMessage(client, mobile, state);
 
     } catch (error) {
@@ -227,8 +238,8 @@ export class PromotionService implements OnModuleInit, OnModuleDestroy {
     }
 
     // Check if channel is banned
-    const bannedChannels = this.promotionStateService.getBannedChannels(mobile);
-    if (bannedChannels.includes(currentChannelId)) {
+    const isBanned = this.promotionStateService.isChannelBanned(mobile, currentChannelId);
+    if (isBanned) {
       this.logger.log(`[${mobile}] Skipping banned channel: ${currentChannelId}`);
       this.moveToNextChannel(mobile, state);
       return;
@@ -236,16 +247,16 @@ export class PromotionService implements OnModuleInit, OnModuleDestroy {
 
     // Send the promotional message
     this.promotionStateService.setPromotingStatus(mobile, true);
-    
+
     try {
       const result = await sendPromotionalMessage(client, mobile, channelInfo, state);
-      
+
       if (result) {
         // Update state on success
         this.promotionStateService.updateLastMessageTime(mobile);
         this.promotionStateService.incrementSuccessCount(mobile);
         this.promotionStateService.incrementMsgCount(mobile);
-        
+
         // Add to message queue for checking
         this.messageQueueService.addToQueue(mobile, {
           channelId: currentChannelId,
@@ -265,7 +276,14 @@ export class PromotionService implements OnModuleInit, OnModuleDestroy {
 
   private moveToNextChannel(mobile: string, state: PromotionState): void {
     const nextIndex = (state.channelIndex + 1) % state.channels.length;
-    this.promotionStateService.setChannelIndex(mobile, nextIndex);
+
+    // If we've completed a full cycle through all channels, reshuffle them
+    if (nextIndex === 0 && state.channels.length > 1) {
+      this.logger.log(`[${mobile}] Completed full channel cycle, reshuffling channels...`);
+      this.promotionStateService.reshuffleChannels(mobile);
+    } else {
+      this.promotionStateService.setChannelIndex(mobile, nextIndex);
+    }
   }
 
   private chunkArray<T>(array: T[], size: number): T[][] {
@@ -298,13 +316,56 @@ export class PromotionService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  async getSystemHealth(): Promise<Record<string, any>> {
+    try {
+      const activeConnections = this.connectionManagerService.getActiveConnections();
+      const activeMobiles = this.connectionManagerService.getCurrentActiveMobiles();
+      const promotionStates = this.promotionStateService.getAllMobileStates();
+      const availableMobiles = this.connectionManagerService.getAvailableMobiles();
+
+      const healthStatus = {
+        promotionService: {
+          isRunning: this.isPromotionRunning,
+          activeConnections: activeConnections.length,
+          availableMobiles: availableMobiles.length,
+          activeMobiles: activeMobiles.length,
+          promotionStates: promotionStates.size,
+          healthyMobiles: this.promotionStateService.getHealthyMobiles().length,
+        },
+        connectionManager: {
+          totalClients: this.connectionManagerService.getAllActiveConnections().size,
+          activeTelegramClients: this.connectionManagerService.getActiveTelegramClients().size,
+          activeConnections: activeConnections.length,
+        },
+        rotationManager:{
+          totalMobiles: this.promotionStateService.getAllMobileStates().size,
+          healthyMobiles: this.promotionStateService.getHealthyMobiles().length,
+        },
+        sync: {
+          inSync: activeConnections.length === promotionStates.size,
+          mobilesMissingStates: activeConnections.filter(mobile =>
+            !promotionStates.has(mobile)
+          ),
+          statesWithoutMobiles: Array.from(promotionStates.keys()).filter(mobile =>
+            !activeConnections.includes(mobile)
+          ),
+        }
+      };
+
+      return healthStatus;
+    } catch (error) {
+      this.logger.error('Error getting system health:', error);
+      throw error;
+    }
+  }
+
   async resetMobilePromotion(mobile: string): Promise<void> {
     this.logger.log(`Resetting promotion for mobile: ${mobile}`);
     this.promotionStateService.resetPromotionResults(mobile);
     this.promotionStateService.resetMobileStats(mobile);
     this.promotionStateService.setChannelIndex(mobile, 0);
     this.messageQueueService.clearQueue(mobile);
-    
+
     // Save the reset state
     await this.promotionStateService.saveResultsToJson(mobile);
   }
@@ -328,19 +389,74 @@ export class PromotionService implements OnModuleInit, OnModuleDestroy {
   async restartPromotion(): Promise<void> {
     this.logger.log('Restarting global promotion system...');
     this.stopPromotion();
-    
-    // Save current state before restart
-    await this.promotionStateService.saveAllResults();
-    
-    // Wait a moment
-    await this.sleep(3000);
 
-    // Reinitialize all clients
+    await this.promotionStateService.saveAllResults();
+    await this.sleep(3000);
     await this.initializeClientsAndStartPromotion();
   }
 
   // Helper method for delays
   private sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  // Dynamic client management methods for connection manager integration
+  async addNewClient(mobile: string): Promise<void> {
+    this.logger.log(`Adding new client for mobile: ${mobile}`);
+    try {
+      const connectionInfo = this.connectionManagerService.getConnectionInfo(mobile);
+      if (!connectionInfo || !connectionInfo.isHealthy) {
+        this.logger.warn(`Cannot add unhealthy client for mobile: ${mobile}`);
+        return;
+      }
+
+      // Initialize state for the new client
+      await this.initializeClientState(mobile);
+      this.logger.log(`Successfully added new client: ${mobile}`);
+    } catch (error) {
+      this.logger.error(`Error adding new client ${mobile}:`, error);
+    }
+  }
+
+  async removeClient(mobile: string): Promise<void> {
+    this.logger.log(`Removing client for mobile: ${mobile}`);
+    try {
+      // Save current state before removing
+      await this.promotionStateService.saveResultsToJson(mobile);
+
+      // Clear message queue and remove state
+      this.messageQueueService.clearQueue(mobile);
+      this.promotionStateService.removeMobileState(mobile);
+
+      this.logger.log(`Successfully removed client: ${mobile}`);
+    } catch (error) {
+      this.logger.error(`Error removing client ${mobile}:`, error);
+    }
+  }
+
+  async handleRotation(): Promise<void> {
+    this.logger.log('Syncing promotion service with connection manager');
+    try {
+      const activeConnections = this.connectionManagerService.getActiveConnections();
+      const currentMobiles = Array.from(this.promotionStateService.getAllMobileStates().keys());
+
+      // Add new mobiles
+      for (const mobile of activeConnections) {
+        if (!currentMobiles.includes(mobile)) {
+          await this.addNewClient(mobile);
+        }
+      }
+
+      // Remove mobiles that are no longer managed
+      for (const mobile of currentMobiles) {
+        if (!activeConnections.includes(mobile)) {
+          await this.removeClient(mobile);
+        }
+      }
+
+      this.logger.log('Sync with connection manager completed');
+    } catch (error) {
+      this.logger.error('Error syncing with connection manager:', error);
+    }
   }
 }

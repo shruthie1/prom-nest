@@ -1,58 +1,59 @@
 // Utility functions for dialog operations
 import { TelegramClient, Api } from 'telegram';
 import { PromotionState } from '../interfaces/promotion.interfaces';
+import { sleep } from 'src/utils';
+import { shuffleArrayWithMobileSeed } from './shuffle.utils';
 
 export async function fetchDialogs(
   client: TelegramClient,
   state: PromotionState,
   mobile: string
 ): Promise<string[]> {
-  const batchSize = 500;
+  const batchSize = 100;
   const channelDataSet = new Set<string>();
   const channelDetails: { channelId: string; participantsCount: number }[] = [];
 
   console.log(`[${mobile}] Fetching dialogs from clients...`);
 
   try {
-    let offsetDate = 0;
     let currentBatch = 0;
+    let hasmore = true;
 
-    while (true) {
+    while (hasmore) {
       const dialogs = await client.getDialogs({
         limit: batchSize,
-        offsetDate: offsetDate,
       });
-
+      console.log(`[${mobile}] Fetched ${dialogs.length} dialogs`);
       if (dialogs.length === 0) {
+        hasmore = false;
         break;
       }
 
       for (const dialog of dialogs) {
-        if (dialog.entity instanceof Api.Channel) {
-          const channel = dialog.entity as Api.Channel;
-          if (channel.broadcast && !channel.megagroup) {
-            const channelId = channel.id.toString().replace(/^-100/, "");
-            const participantsCount = channel.participantsCount || 0;
-
-            if (participantsCount > 100) {
-              channelDataSet.add(channelId);
-              channelDetails.push({ channelId, participantsCount });
-            }
-          }
-        }
+        const channel = dialog.entity as Api.Channel;
+        const channelId = channel.id.toString().replace(/^-100/, "");
+        const participantsCount = channel.participantsCount || 0;
+        channelDataSet.add(channelId);
+        channelDetails.push({ channelId, participantsCount });
       }
-
-      const lastDialog = dialogs[dialogs.length - 1];
-      offsetDate = lastDialog.date || 0;
       currentBatch++;
-
-      if (currentBatch >= 10) { // Limit to prevent infinite loops
+      if (currentBatch >= 5 || channelDataSet.size > 300) { // Limit to prevent infinite loops
         break;
       }
+      console.log(`[${mobile}] Sleeping for 300 milliseconds to avoid API limits... currentSize: ${channelDataSet.size} | batch: ${currentBatch}`);
+      await sleep(300); // Sleep to avoid hitting API limits
     }
-
-    console.log(`[${mobile}] Found ${channelDataSet.size} channels from dialogs`);
-    return Array.from(channelDataSet);
+    if (channelDataSet.size === 0) {
+      console.log(`[${mobile}] No channels found in dialogs.`);
+      return [];
+    }
+    
+    // Shuffle the channels using mobile-specific seeding to ensure different but consistent order per mobile
+    const channelsArray = Array.from(channelDataSet);
+    const shuffledChannels = shuffleArrayWithMobileSeed(channelsArray, mobile);
+    
+    console.log(`[${mobile}] Found ${channelDataSet.size} channels from dialogs (shuffled with mobile-specific seed)`);
+    return shuffledChannels;
   } catch (error) {
     console.error(`[${mobile}] Error fetching dialogs:`, error);
     return [];

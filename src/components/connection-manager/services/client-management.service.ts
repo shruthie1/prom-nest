@@ -4,7 +4,7 @@ import { ClientService } from '../../clients/client.service';
 import { TelegramService } from '../../telegram/telegram.service';
 import { Client } from '../../clients/schemas/client.schema';
 import {
-  ManagedTelegramClient,
+  ActiveConnection,
   ConnectionInfo,
   ClientWithDetails
 } from '../interfaces/connection-manager.interfaces';
@@ -13,7 +13,7 @@ import { ConnectionManagerConfig } from '../config/connection-manager.config';
 @Injectable()
 export class ClientManagementService {
   private readonly logger = new Logger(ClientManagementService.name);
-  private managedClients = new Map<string, ManagedTelegramClient>();
+  private activeConnections = new Map<string, ActiveConnection>();
   private availableMobilePool = new Map<string, Client>(); // Maps mobile number to client info
 
   constructor(
@@ -26,9 +26,8 @@ export class ClientManagementService {
    */
   async getActiveClients(){
     this.logger.debug('Fetching active clients from client service');
-    const activeClients = await this.clientService.getActiveClients();
-    this.logger.log(`Retrieved ${activeClients?.length || 0} active clients`);
-    return activeClients;
+    const activeConnections = await this.clientService.getActiveClients();
+    return activeConnections;
   }
 
   /**
@@ -37,7 +36,7 @@ export class ClientManagementService {
   async createOrUpdateTelegramClient(
     mobile: string,
     clientInfo: Client
-  ): Promise<ManagedTelegramClient | null> {
+  ): Promise<ActiveConnection | null> {
     this.logger.debug(`Starting client creation/update for mobile: ${mobile?.substring(0, 6)}***`);
 
     const trimmed = mobile?.trim();
@@ -60,7 +59,7 @@ export class ClientManagementService {
         return null;
       }
 
-      const managed: ManagedTelegramClient = {
+      const active: ActiveConnection = {
         telegramClient: telegramClientInfo.client,
         clientInfo: telegramClientInfo,
         clientId: clientInfo.clientId,
@@ -70,10 +69,10 @@ export class ClientManagementService {
         createdAt: new Date(),
       };
 
-      this.managedClients.set(trimmed, managed);
-      this.logger.debug(`Added managed client to pool. Total managed clients: ${this.managedClients.size}`);
+      this.activeConnections.set(trimmed, active);
+      this.logger.debug(`Added active client to pool. Total active clients: ${this.activeConnections.size}`);
 
-      return managed;
+      return active;
     } catch (error: any) {
       this.logger.error(`Failed to connect/create telegram client for ${trimmed.substring(0, 6)}*** (clientId: ${clientInfo.clientId}): ${error.message}`, error.stack);
       return null;
@@ -83,15 +82,15 @@ export class ClientManagementService {
   /**
    * Remove inactive clients that are no longer in the active clients list
    */
-  async removeInactiveClients(activeClients: Client[]): Promise<void> {
-    this.logger.debug(`Starting inactive client removal process. Active clients count: ${activeClients?.length || 0}, Managed clients count: ${this.managedClients.size}`);
+  async removeInactiveConnections(activeConnections: Client[]): Promise<void> {
+    this.logger.debug(`Starting inactive client removal process. Active clients count: ${activeConnections?.length || 0}, Managed clients count: ${this.activeConnections.size}`);
 
     try {
       // Build set of currently active mobiles
       const activeMobiles = new Set<string>();
       let totalPromoteMobiles = 0;
 
-      for (const client of activeClients) {
+      for (const client of activeConnections) {
         if (client.promoteMobile && Array.isArray(client.promoteMobile)) {
           client.promoteMobile.forEach(mobile => {
             if (mobile && typeof mobile === 'string') {
@@ -109,10 +108,10 @@ export class ClientManagementService {
       const mobilesToRemove: string[] = [];
 
       // Identify clients to remove
-      for (const [mobile, managedClient] of this.managedClients.entries()) {
+      for (const [mobile, activeConnection] of this.activeConnections.entries()) {
         if (!activeMobiles.has(mobile)) {
           mobilesToRemove.push(mobile);
-          this.logger.debug(`Marked for removal: ${mobile.substring(0, 6)}*** (clientId: ${managedClient.clientId}) - not in active list`);
+          this.logger.debug(`Marked for removal: ${mobile.substring(0, 6)}*** (clientId: ${activeConnection.clientId}) - not in active list`);
         }
       }
 
@@ -130,7 +129,7 @@ export class ClientManagementService {
       }
 
       if (removedCount > 0) {
-        this.logger.log(`Successfully removed ${removedCount} inactive telegram clients. Remaining managed clients: ${this.managedClients.size}`);
+        this.logger.log(`Successfully removed ${removedCount} inactive telegram clients. Remaining active clients: ${this.activeConnections.size}`);
       } else {
         this.logger.debug('No inactive clients were removed');
       }
@@ -144,25 +143,17 @@ export class ClientManagementService {
    * Remove a specific Telegram client with proper cleanup
    */
   async removeTelegramClient(mobile: string): Promise<void> {
-    const managedClient = this.managedClients.get(mobile);
-    if (!managedClient) {
-      this.logger.debug(`No managed client found for mobile: ${mobile.substring(0, 6)}*** - skipping removal`);
+    const activeConnection = this.activeConnections.get(mobile);
+    if (!activeConnection) {
+      this.logger.debug(`No active client found for mobile: ${mobile.substring(0, 6)}*** - skipping removal`);
       return;
     }
 
-    this.logger.log(`Starting removal process for telegram client: ${mobile.substring(0, 6)}*** (clientId: ${managedClient.clientId})`);
-
     try {
-      // Mark as inactive first
-      managedClient.isActive = false;
-      this.logger.debug(`Marked client as inactive: ${mobile.substring(0, 6)}***`);
-
-      // Properly disconnect and cleanup the client
-      if (managedClient.telegramClient) {
+      activeConnection.isActive = false;
+      if (activeConnection.telegramClient) {
         try {
-          if (managedClient.telegramClient.connected) {
-            this.logger.debug(`Disconnecting telegram client: ${mobile.substring(0, 6)}***`);
-
+          if (activeConnection.telegramClient.connected) {
             // Create cancellable timeout for disconnect
             let timeoutHandle: NodeJS.Timeout;
             const timeoutPromise = new Promise<never>((_, reject) => {
@@ -173,7 +164,7 @@ export class ClientManagementService {
 
             try {
               await Promise.race([
-                managedClient.telegramClient.disconnect(),
+                activeConnection.telegramClient.disconnect(),
                 timeoutPromise
               ]);
               this.logger.debug(`Successfully disconnected telegram client: ${mobile.substring(0, 6)}***`);
@@ -192,7 +183,6 @@ export class ClientManagementService {
 
         // Unregister from telegram service
         try {
-          this.logger.debug(`Unregistering client from telegram service: ${mobile.substring(0, 6)}***`);
           this.telegramService.unregisterClient(mobile);
           this.logger.debug(`Successfully unregistered client: ${mobile.substring(0, 6)}***`);
         } catch (unregisterError) {
@@ -200,26 +190,23 @@ export class ClientManagementService {
         }
       }
 
-      // Remove from managed clients
-      this.managedClients.delete(mobile);
-      this.logger.log(`Successfully removed telegram client: ${mobile.substring(0, 6)}*** (clientId: ${managedClient.clientId}). Remaining clients: ${this.managedClients.size}`);
-
+      this.activeConnections.delete(mobile);
+      this.logger.log(`Successfully removed telegram client: ${mobile.substring(0, 6)}*** (clientId: ${activeConnection.clientId}). Remaining clients: ${this.activeConnections.size}`);
     } catch (error) {
       this.logger.error(`Error removing telegram client for mobile ${mobile.substring(0, 6)}***:`, error.stack);
-      // Still remove from managed clients even if cleanup failed
-      this.managedClients.delete(mobile);
-      this.logger.warn(`Force removed client from managed pool due to cleanup error: ${mobile.substring(0, 6)}***`);
+      this.activeConnections.delete(mobile);
+      this.logger.warn(`Force removed client from active pool due to cleanup error: ${mobile.substring(0, 6)}***`);
     }
   }
 
   /**
-   * Cleanup all managed clients and mappings
+   * Cleanup all active clients and mappings
    */
   async cleanupAllClients(): Promise<void> {
-    this.logger.log(`Starting cleanup of all managed telegram clients. Current count: ${this.managedClients.size}`);
+    this.logger.log(`Starting cleanup of all active telegram clients. Current count: ${this.activeConnections.size}`);
 
     const startTime = Date.now();
-    const clientMobiles = Array.from(this.managedClients.keys());
+    const clientMobiles = Array.from(this.activeConnections.keys());
 
     const cleanupPromises = clientMobiles.map(mobile =>
       this.removeTelegramClient(mobile).catch(error => {
@@ -236,11 +223,11 @@ export class ClientManagementService {
     this.logger.debug(`Cleanup results: ${successCount} successful, ${failureCount} failed`);
 
     // Clear all state
-    this.managedClients.clear();
+    this.activeConnections.clear();
     this.availableMobilePool.clear();
 
     const duration = Date.now() - startTime;
-    this.logger.log(`All managed telegram clients and mappings cleaned up in ${duration}ms. Pool sizes: managed=${this.managedClients.size}, available=${this.availableMobilePool.size}`);
+    this.logger.log(`All active telegram clients and mappings cleaned up in ${duration}ms. Pool sizes: active=${this.activeConnections.size}, available=${this.availableMobilePool.size}`);
   }
 
   /**
@@ -253,47 +240,46 @@ export class ClientManagementService {
     }
 
     const trimmedMobile = mobile.trim();
-    const managedClient = this.managedClients.get(trimmedMobile);
+    const activeConnection = this.activeConnections.get(trimmedMobile);
 
-    if (!managedClient) {
-      this.logger.debug(`No managed client found for mobile: ${trimmedMobile.substring(0, 6)}***`);
+    if (!activeConnection) {
+      this.logger.debug(`No active client found for mobile: ${trimmedMobile.substring(0, 6)}***`);
       return null;
     }
 
-    if (!managedClient.isActive) {
-      this.logger.debug(`Client for mobile ${trimmedMobile.substring(0, 6)}*** is not active (clientId: ${managedClient.clientId})`);
+    if (!activeConnection.isActive) {
+      this.logger.debug(`Client for mobile ${trimmedMobile.substring(0, 6)}*** is not active (clientId: ${activeConnection.clientId})`);
       return null;
     }
 
-    if (!managedClient.telegramClient || !managedClient.telegramClient.connected) {
-      this.logger.debug(`Client for mobile ${trimmedMobile.substring(0, 6)}*** is not connected (clientId: ${managedClient.clientId})`);
+    if (!activeConnection.telegramClient || !activeConnection.telegramClient.connected) {
+      this.logger.debug(`Client for mobile ${trimmedMobile.substring(0, 6)}*** is not connected (clientId: ${activeConnection.clientId})`);
       return null;
     }
 
-    this.logger.debug(`Retrieved connected telegram client for mobile: ${trimmedMobile.substring(0, 6)}*** (clientId: ${managedClient.clientId})`);
-    return managedClient.telegramClient;
+    return activeConnection.telegramClient;
   }
 
   /**
    * Get connection health status for all mobiles
    */
   getConnectionHealthMap(): Map<string, boolean> {
-    this.logger.debug(`Generating connection health map for ${this.managedClients.size} managed clients`);
+    this.logger.debug(`Generating connection health map for ${this.activeConnections.size} active clients`);
 
     const healthMap = new Map<string, boolean>();
     let healthyCount = 0;
     let unhealthyCount = 0;
 
-    for (const [mobile, managedClient] of this.managedClients.entries()) {
-      const isHealthy = managedClient.isActive &&
-                       managedClient.telegramClient?.connected === true;
+    for (const [mobile, activeConnection] of this.activeConnections.entries()) {
+      const isHealthy = activeConnection.isActive &&
+                       activeConnection.telegramClient?.connected === true;
       healthMap.set(mobile, isHealthy);
 
       if (isHealthy) {
         healthyCount++;
       } else {
         unhealthyCount++;
-        this.logger.debug(`Unhealthy client detected: ${mobile.substring(0, 6)}*** (active: ${managedClient.isActive}, connected: ${managedClient.telegramClient?.connected})`);
+        this.logger.debug(`Unhealthy client detected: ${mobile.substring(0, 6)}*** (active: ${activeConnection.isActive}, connected: ${activeConnection.telegramClient?.connected})`);
       }
     }
 
@@ -311,52 +297,49 @@ export class ClientManagementService {
     }
 
     const trimmedMobile = mobile.trim();
-    const managedClient = this.managedClients.get(trimmedMobile);
+    const activeConnection = this.activeConnections.get(trimmedMobile);
 
-    if (!managedClient) {
+    if (!activeConnection) {
       this.logger.debug(`No connection info available for mobile: ${trimmedMobile.substring(0, 6)}***`);
       return null;
     }
 
     const connectionInfo = {
-      isHealthy: managedClient.isActive,
-      isConnected: managedClient.telegramClient?.connected || false,
-      clientId: managedClient.clientId,
-      mainAccUsername: managedClient.clientInfo.username,
-      lastHealthCheck: managedClient.lastHealthCheck,
-      createdAt: managedClient.createdAt,
+      isHealthy: activeConnection.isActive,
+      isConnected: activeConnection.telegramClient?.connected || false,
+      clientId: activeConnection.clientId,
+      mainAccUsername: activeConnection.clientInfo.username,
+      lastHealthCheck: activeConnection.lastHealthCheck,
+      createdAt: activeConnection.createdAt,
     };
 
-    this.logger.debug(`Retrieved connection info for ${trimmedMobile.substring(0, 6)}***: healthy=${connectionInfo.isHealthy}, connected=${connectionInfo.isConnected}, clientId=${connectionInfo.clientId}`);
     return connectionInfo;
   }
 
   /**
-   * Get all managed mobile numbers
+   * Get all active mobile numbers
    */
-  getManagedMobiles(): string[] {
-    const mobiles = Array.from(this.managedClients.keys());
-    this.logger.debug(`Retrieved ${mobiles.length} managed mobile numbers`);
+  getActiveConnections(): string[] {
+    const mobiles = Array.from(this.activeConnections.keys());
     return mobiles;
   }
 
   /**
    * Get all telegram clients (including inactive/disconnected ones)
    */
-  getAllManagedTelegramClients(): Map<string, TelegramClient> {
-    this.logger.debug(`Retrieving all managed telegram clients from ${this.managedClients.size} managed entries`);
+  getAllActiveConnections(): Map<string, TelegramClient> {
+    this.logger.debug(`Retrieving all active telegram clients from ${this.activeConnections.size} active entries`);
 
     const allClients = new Map<string, TelegramClient>();
     let clientCount = 0;
 
-    for (const [mobile, managedClient] of this.managedClients.entries()) {
-      if (managedClient.telegramClient) {
-        allClients.set(mobile, managedClient.telegramClient);
+    for (const [mobile, activeConnection] of this.activeConnections.entries()) {
+      if (activeConnection.telegramClient) {
+        allClients.set(mobile, activeConnection.telegramClient);
         clientCount++;
       }
     }
 
-    this.logger.debug(`Retrieved ${clientCount} telegram client instances from ${this.managedClients.size} managed clients`);
     return allClients;
   }
 
@@ -370,83 +353,55 @@ export class ClientManagementService {
     }
 
     const trimmedMobile = mobile.trim();
-    const managedClient = this.managedClients.get(trimmedMobile);
+    const activeConnection = this.activeConnections.get(trimmedMobile);
 
-    if (!managedClient) {
-      this.logger.debug(`No managed client found for mobile: ${trimmedMobile.substring(0, 6)}***`);
-      return { client: null, error: 'No managed client found for mobile' };
+    if (!activeConnection) {
+      this.logger.debug(`No active client found for mobile: ${trimmedMobile.substring(0, 6)}***`);
+      return { client: null, error: 'No active client found for mobile' };
     }
 
-    if (!managedClient.isActive) {
-      this.logger.debug(`Client not active for mobile ${trimmedMobile.substring(0, 6)}*** (clientId: ${managedClient.clientId})`);
+    if (!activeConnection.isActive) {
+      this.logger.debug(`Client not active for mobile ${trimmedMobile.substring(0, 6)}*** (clientId: ${activeConnection.clientId})`);
       return {
         client: null,
         error: 'Client is not active',
-        managedClient
+        activeConnection
       };
     }
 
-    if (!managedClient.telegramClient) {
-      this.logger.warn(`No telegram client instance for mobile ${trimmedMobile.substring(0, 6)}*** (clientId: ${managedClient.clientId})`);
+    if (!activeConnection.telegramClient) {
+      this.logger.warn(`No telegram client instance for mobile ${trimmedMobile.substring(0, 6)}*** (clientId: ${activeConnection.clientId})`);
       return {
         client: null,
         error: 'No telegram client instance',
-        managedClient
+        activeConnection
       };
     }
 
-    if (!managedClient.telegramClient.connected) {
-      this.logger.debug(`Client not connected for mobile ${trimmedMobile.substring(0, 6)}*** (clientId: ${managedClient.clientId})`);
+    if (!activeConnection.telegramClient.connected) {
+      this.logger.debug(`Client not connected for mobile ${trimmedMobile.substring(0, 6)}*** (clientId: ${activeConnection.clientId})`);
       return {
         client: null,
         error: 'Client is not connected',
-        managedClient
+        activeConnection
       };
     }
 
-    this.logger.debug(`Retrieved client with details for mobile: ${trimmedMobile.substring(0, 6)}*** (clientId: ${managedClient.clientId})`);
-    return { client: managedClient.telegramClient, managedClient };
+    return { client: activeConnection.telegramClient, activeConnection };
+  }
+
+  getActiveConnectionsMap(): Map<string, ActiveConnection> {
+    this.logger.debug(`Returning active clients map with ${this.activeConnections.size} entries`);
+    return this.activeConnections;
   }
 
   /**
-   * Get all healthy mobiles from managed clients
+   * Clear all active clients (for cleanup)
    */
-  getHealthyMobiles(): string[] {
-    this.logger.debug(`Filtering healthy mobiles from ${this.managedClients.size} managed clients`);
-
-    const healthyMobiles = Array.from(this.managedClients.entries())
-      .filter(([mobile, managedClient]) => {
-        const isHealthy = managedClient.isActive &&
-               managedClient.telegramClient?.connected === true;
-
-        if (!isHealthy) {
-          this.logger.debug(`Mobile ${mobile.substring(0, 6)}*** is not healthy (active: ${managedClient.isActive}, connected: ${managedClient.telegramClient?.connected})`);
-        }
-
-        return isHealthy;
-      })
-      .map(([mobile, _]) => mobile)
-      .sort(); // Sort for consistent ordering
-
-    this.logger.log(`Found ${healthyMobiles.length} healthy mobiles out of ${this.managedClients.size} managed clients`);
-    return healthyMobiles;
-  }
-
-  /**
-   * Get managed clients map (for internal use by other services)
-   */
-  getManagedClientsMap(): Map<string, ManagedTelegramClient> {
-    this.logger.debug(`Returning managed clients map with ${this.managedClients.size} entries`);
-    return this.managedClients;
-  }
-
-  /**
-   * Clear all managed clients (for cleanup)
-   */
-  clearManagedClients(): void {
-    const previousCount = this.managedClients.size;
-    this.managedClients.clear();
-    this.logger.log(`Cleared managed clients map. Previous count: ${previousCount}, Current count: ${this.managedClients.size}`);
+  clearActiveConnections(): void {
+    const previousCount = this.activeConnections.size;
+    this.activeConnections.clear();
+    this.logger.log(`Cleared active clients map. Previous count: ${previousCount}, Current count: ${this.activeConnections.size}`);
   }
 
   /**
@@ -463,12 +418,7 @@ export class ClientManagementService {
     this.logger.debug(`Added mobile to available pool: ${trimmedMobile.substring(0, 6)}*** (clientId: ${client.clientId}). Pool size: ${this.availableMobilePool.size}`);
   }
 
-  /**
-   * Create Telegram client for a specific mobile from the available pool
-   */
-  async createTelegramClientForMobile(mobile: string): Promise<ManagedTelegramClient | null> {
-    this.logger.debug(`Attempting to create telegram client for mobile from pool: ${mobile.substring(0, 6)}***`);
-
+  async createTelegramClientForMobile(mobile: string): Promise<ActiveConnection | null> {
     const clientInfo = this.availableMobilePool.get(mobile);
     if (!clientInfo) {
       this.logger.error(`No client info found in available pool for mobile: ${mobile.substring(0, 6)}***`);
@@ -484,7 +434,6 @@ export class ClientManagementService {
    */
   getAllAvailableMobiles(): string[] {
     const availableMobiles = Array.from(this.availableMobilePool.keys());
-    this.logger.debug(`Retrieved ${availableMobiles.length} available mobiles from pool`);
     return availableMobiles;
   }
 
@@ -501,14 +450,11 @@ export class ClientManagementService {
    * Remove client for a specific mobile (used during rotation)
    */
   async removeClientForMobile(mobile: string): Promise<void> {
-    this.logger.debug(`Checking for client removal for mobile: ${mobile.substring(0, 6)}***`);
-
-    const managedClient = this.managedClients.get(mobile);
-    if (managedClient) {
-      this.logger.log(`Removing client for mobile during rotation: ${mobile.substring(0, 6)}*** (clientId: ${managedClient.clientId})`);
+    const activeConnection = this.activeConnections.get(mobile);
+    if (activeConnection) {
       await this.removeTelegramClient(mobile);
     } else {
-      this.logger.debug(`No managed client found for removal: ${mobile.substring(0, 6)}***`);
+      this.logger.debug(`No active client found for removal: ${mobile.substring(0, 6)}***`);
     }
   }
 

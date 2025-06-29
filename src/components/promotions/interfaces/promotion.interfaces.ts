@@ -40,14 +40,12 @@ export interface PromotionState {
   lastMessageTime: number;
   lastCheckedTime: number;
   channels: string[];
-  messageQueue: MessageQueueItem[];
   promoteMsgs: Record<string, string>;
   channelIndex: number;
   failureReason: string | null;
   isPromoting: boolean;
   messageCount: number;
   converted: number;
-  messageQueueInterval: NodeJS.Timeout | null;
 }
 
 export interface IChannel {

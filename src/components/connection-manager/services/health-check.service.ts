@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ManagedTelegramClient, HealthCheckResult } from '../interfaces/connection-manager.interfaces';
+import { ActiveConnection, HealthCheckResult } from '../interfaces/connection-manager.interfaces';
 import { ConnectionManagerConfig } from '../config/connection-manager.config';
 import { ClientManagementService } from './client-management.service';
 
@@ -44,7 +44,7 @@ export class HealthCheckService {
     
     let healthy = 0, unhealthy = 0, recovered = 0, errors = 0;
 
-    const clients = this.clientService.getManagedClientsMap();
+    const clients = this.clientService.getActiveConnectionsMap();
     const totalClients = clients.size;
     
     this.logger.debug(`Performing health check on ${totalClients} managed clients`);
@@ -90,13 +90,13 @@ export class HealthCheckService {
     this.logger.debug('Mobile refresh completed after health check');
   }
 
-  private async checkClientHealth(mobile: string, client: ManagedTelegramClient): Promise<HealthCheckResult> {
+  private async checkClientHealth(mobile: string, client: ActiveConnection): Promise<HealthCheckResult> {
     this.logger.debug(`Checking health for client: ${mobile.substring(0, 6)}*** (clientId: ${client.clientId})`);
     
     try {
       if (!client?.telegramClient) {
         this.logger.warn(`Missing telegram client instance for ${mobile.substring(0, 6)}*** - removing from managed clients`);
-        this.clientService.getManagedClientsMap().delete(mobile);
+        this.clientService.getActiveConnectionsMap().delete(mobile);
         return { mobile, isHealthy: false, error: 'Missing client instance' };
       }
 
@@ -155,9 +155,9 @@ export class HealthCheckService {
   getHealthStatistics() {
     this.logger.debug('Generating health statistics for all managed clients');
     
-    const clients = this.clientService.getManagedClientsMap();
+    const clients = this.clientService.getActiveConnectionsMap();
     const totalClients = clients.size;
-    let healthy = 0, unhealthy = 0, activeButDisconnected = 0, inactiveClients = 0;
+    let healthy = 0, unhealthy = 0, activeButDisconnected = 0, inactiveConnections = 0;
 
     for (const [mobile, client] of clients.entries()) {
       const isActive = client.isActive;
@@ -171,7 +171,7 @@ export class HealthCheckService {
         
         // More detailed categorization for debugging
         if (!isActive) {
-          inactiveClients++;
+          inactiveConnections++;
           this.logger.debug(`Inactive client: ${mobile.substring(0, 6)}***`);
         } else if (!isConnected) {
           activeButDisconnected++;
@@ -187,14 +187,14 @@ export class HealthCheckService {
       healthyPercentage: totalClients > 0 ? Math.round((healthy / totalClients) * 100) : 0,
       details: {
         activeButDisconnected,
-        inactiveClients
+        inactiveConnections
       }
     };
 
     this.logger.log(`Health statistics: ${healthy}/${totalClients} healthy (${statistics.healthyPercentage}%), ${unhealthy} unhealthy`);
     
     if (unhealthy > 0) {
-      this.logger.debug(`Unhealthy breakdown: ${inactiveClients} inactive, ${activeButDisconnected} disconnected`);
+      this.logger.debug(`Unhealthy breakdown: ${inactiveConnections} inactive, ${activeButDisconnected} disconnected`);
     }
 
     return statistics;

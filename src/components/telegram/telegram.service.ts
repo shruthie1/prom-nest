@@ -651,12 +651,12 @@ export class TelegramService implements OnModuleDestroy {
             if (!this.isShuttingDown) {
                 this.logger.debug('Executing scheduled cleanup and health check');
 
-                this.cleanupInactiveConnections().catch(err => {
-                    this.logger.error('Error in cleanup interval', {
-                        error: err.message,
-                        stack: err.stack
-                    });
-                });
+                // this.cleanupInactiveConnections().catch(err => {
+                //     this.logger.error('Error in cleanup interval', {
+                //         error: err.message,
+                //         stack: err.stack
+                //     });
+                // });
 
                 this.performHealthCheck().catch(err => {
                     this.logger.error('Error in health check', {
@@ -678,11 +678,11 @@ export class TelegramService implements OnModuleDestroy {
 
         // Run initial cleanup
         this.logger.log('Running initial cleanup and health check');
-        this.cleanupInactiveConnections().catch(err => {
-            this.logger.error('Error in initial cleanup', {
-                error: err.message
-            });
-        });
+        // this.cleanupInactiveConnections().catch(err => {
+        //     this.logger.error('Error in initial cleanup', {
+        //         error: err.message
+        //     });
+        // });
 
         return this.cleanupInterval;
     }

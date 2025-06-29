@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PromotionState, PromotionConfig, IClientDetails, PromotionResult, MobileStats } from '../interfaces/promotion.interfaces';
+import { getRandomStartIndex, shuffleArrayWithMobileSeed } from '../utils/shuffle.utils';
 
 @Injectable()
 export class PromotionStateService {
@@ -28,14 +29,12 @@ export class PromotionStateService {
       lastMessageTime: Date.now() - 16 * 60 * 1000,
       lastCheckedTime: 0,
       channels: [],
-      messageQueue: [],
       promoteMsgs: {},
       channelIndex: 0,
       failureReason: null,
       isPromoting: false,
       messageCount: 0,
-      converted: 0,
-      messageQueueInterval: null
+      converted: 0
     };
 
     if (!this.mobilePromotionStates.has(mobile)) {
@@ -69,7 +68,7 @@ export class PromotionStateService {
       // Note: You would need to inject the database service
       // const db = this.databaseService.getInstance();
       // state.promoteMsgs = await db.getPromoteMsgs();
-      state.promoteMsgs = { '0': 'Default promotion message' }; // Fallback
+      state.promoteMsgs = { '0': 'Heyy Boiis' }; // Fallback
       this.logger.log(`[${mobile}] Promotion messages loaded: ${Object.keys(state.promoteMsgs).length} messages`);
     } catch (error) {
       this.logger.error(`[${mobile}] Failed to initialize promotion state:`, error);
@@ -119,6 +118,28 @@ export class PromotionStateService {
     this.logger.log(`[${mobile}] Promotion results reset. Cleared ${previousSize} entries`);
   }
 
+  isChannelBanned(mobile: string, channelId: string): boolean {
+    this.logger.log(`[${mobile}] Checking if channel is banned: ${channelId}`);
+    const state = this.mobilePromotionStates.get(mobile);
+    if (!state) {
+      throw new Error(`No promotion state found for mobile: ${mobile}`);
+    }
+    if (!state.promotionResults.has(channelId)) {
+      this.logger.log(`[${mobile}] Channel not exists in results: ${channelId}`);
+      return false;
+    }
+    const result = state.promotionResults.get(channelId);
+    if (result.success) {
+      this.logger.log(`[${mobile}] No promotion result found for channel: ${channelId}`);
+      return false;
+    }
+    if (!result.success && result.lastCheckTimestamp > Date.now() - (3 * 24 * 60 * 60 * 1000)) {
+      this.logger.log(`[${mobile}] Channel is banned based on Prev Result: ${channelId}`);
+      return true;
+    }
+    return false;
+  }
+
   getBannedChannels(mobile: string): string[] {
     this.logger.log(`[${mobile}] Getting banned channels`);
     const state = this.mobilePromotionStates.get(mobile);
@@ -140,10 +161,11 @@ export class PromotionStateService {
   getHealthyMobiles(): string[] {
     const healthyMobiles: string[] = [];
     this.mobilePromotionStates.forEach((state, mobile) => {
-      const isHealthy = state.daysLeft < 7 &&
-        ((state.lastMessageTime < Date.now() - 12 * 60 * 1000 && state.daysLeft < 1) ||
-          (state.lastMessageTime < Date.now() - 3 * 60 * 1000 && state.daysLeft > 0)) &&
-        state.sleepTime < Date.now();
+      // const isHealthy = state.daysLeft < 7 &&
+      //   ((state.lastMessageTime < Date.now() - 12 * 60 * 1000 && state.daysLeft < 1) ||
+      //     (state.lastMessageTime < Date.now() - 3 * 60 * 1000 && state.daysLeft > 0)) &&
+      //   state.sleepTime < Date.now();
+      const isHealthy = state.lastMessageTime < Date.now() - 60000
       if (isHealthy) {
         healthyMobiles.push(mobile);
       }
@@ -233,7 +255,7 @@ export class PromotionStateService {
     }
     state.failedCount++;
     state.tempFailCount++;
-    this.logger.log(`[${mobile}] Failed count incremented to: ${state.failedCount} (tempFailCount: ${state.tempFailCount})`);
+    // this.logger.log(`[${mobile}] Failed count incremented to: ${state.failedCount} (tempFailCount: ${state.tempFailCount})`);
   }
 
   incrementTempFailCount(mobile: string): void {
@@ -278,7 +300,7 @@ export class PromotionStateService {
       throw new Error(`No promotion state found for mobile: ${mobile}`);
     }
     state.isPromoting = isPromoting;
-    this.logger.log(`[${mobile}] Promoting status set to: ${isPromoting}`);
+    // this.logger.log(`[${mobile}] Promoting status set to: ${isPromoting}`);
   }
 
   setChannelIndex(mobile: string, index: number): void {
@@ -286,8 +308,9 @@ export class PromotionStateService {
     if (!state) {
       throw new Error(`No promotion state found for mobile: ${mobile}`);
     }
+    const previousIndex = state.channelIndex;
     state.channelIndex = index;
-    this.logger.log(`[${mobile}] Channel index set to: ${index}`);
+    // this.logger.log(`[${mobile}] Channel index changed from ${previousIndex} to ${index} (total channels: ${state.channels.length})`);
   }
 
   updateSleepTime(mobile: string, sleepUntil: number): void {
@@ -314,8 +337,11 @@ export class PromotionStateService {
       throw new Error(`No promotion state found for mobile: ${mobile}`);
     }
     state.channels = channels;
-    state.channelIndex = 0; // Reset index when setting new channels
-    this.logger.log(`[${mobile}] Channels set: ${channels.length} channels loaded, index reset to 0`);
+
+    // Set a mobile-specific starting index to prevent channel collisions between mobiles
+    state.channelIndex = getRandomStartIndex(mobile, channels.length);
+
+    this.logger.log(`[${mobile}] Channels set: ${channels.length} channels loaded, starting at mobile-specific index: ${state.channelIndex}`);
   }
 
   updatePromotionResult(
@@ -349,15 +375,15 @@ export class PromotionStateService {
     try {
       const fs = await import('fs/promises');
       const path = await import('path');
-      
+
       const dir = path.dirname(`./mobileStats-${mobile}.json`);
       await fs.mkdir(dir, { recursive: true });
-      
+
       const data = {
         mobileStats: this.getMobileStats(mobile),
         promotionResults: this.getPromotionResults(mobile),
       };
-      
+
       await fs.writeFile(`./mobileStats-${mobile}.json`, JSON.stringify(data, null, 2), 'utf-8');
       this.logger.log(`[${mobile}] Results saved to mobileStats-${mobile}.json`);
     } catch (error) {
@@ -427,7 +453,7 @@ export class PromotionStateService {
     state.daysLeft = mobileStats.daysLeft || -1;
     state.lastCheckedTime = mobileStats.lastCheckedTime || Date.now();
     state.converted = mobileStats.converted || 0;
-    
+
     this.logger.log(`[${mobile}] Mobile stats updated - Messages: ${state.messageCount}, Success: ${state.successCount}, Failed: ${state.failedCount}`);
   }
 
@@ -482,8 +508,8 @@ export class PromotionStateService {
   // Automatic save methods
   async saveAllResults(): Promise<void> {
     this.logger.log('Saving all mobile results to JSON files');
-    const savePromises = Array.from(this.mobilePromotionStates.keys()).map(mobile => 
-      this.saveResultsToJson(mobile).catch(error => 
+    const savePromises = Array.from(this.mobilePromotionStates.keys()).map(mobile =>
+      this.saveResultsToJson(mobile).catch(error =>
         this.logger.error(`Failed to save results for ${mobile}:`, error)
       )
     );
@@ -492,8 +518,8 @@ export class PromotionStateService {
 
   async loadAllResults(): Promise<void> {
     this.logger.log('Loading all mobile results from JSON files');
-    const loadPromises = Array.from(this.mobilePromotionStates.keys()).map(mobile => 
-      this.importResultsFromJson(mobile).catch(error => 
+    const loadPromises = Array.from(this.mobilePromotionStates.keys()).map(mobile =>
+      this.importResultsFromJson(mobile).catch(error =>
         this.logger.error(`Failed to load results for ${mobile}:`, error)
       )
     );
@@ -513,7 +539,7 @@ export class PromotionStateService {
         tempFailCount: state.tempFailCount,
         lastMessageTime: state.lastMessageTime,
         channelsAvailable: state.channels.length,
-        queuedMessages: state.messageQueue.length
+        queuedMessages: 0 // Message queue is now managed separately by MessageQueueService
       };
     });
     return stats;
@@ -526,5 +552,30 @@ export class PromotionStateService {
       this.logger.log(`[${mobile}] Messages: ${state.messageCount}, Success: ${state.successCount}, Failed: ${state.failedCount}, Days Left: ${state.daysLeft}, Last Msg: ${lastMsgMinutes}mins ago, Promoting: ${state.isPromoting}`);
     });
     this.logger.log("=== END MOBILE STATES ===");
+  }
+
+  /**
+   * Reshuffle channels for a mobile to prevent long-term collisions
+   * This should be called periodically or when the mobile has cycled through all channels
+   */
+  reshuffleChannels(mobile: string): void {
+    const state = this.mobilePromotionStates.get(mobile);
+    if (!state) {
+      throw new Error(`No promotion state found for mobile: ${mobile}`);
+    }
+
+    if (state.channels.length === 0) {
+      return; // Nothing to reshuffle
+    }
+
+    // Reshuffle using mobile-specific seeding with current timestamp as additional entropy
+    const timestamp = Date.now();
+    const enhancedMobile = `${mobile}_${Math.floor(timestamp / (10 * 60 * 1000))}`; // Changes every 10 minutes
+    const reshuffledChannels = shuffleArrayWithMobileSeed(state.channels, enhancedMobile);
+
+    state.channels = reshuffledChannels;
+    state.channelIndex = 0; // Reset to start of reshuffled list
+
+    this.logger.log(`[${mobile}] Channels reshuffled: ${reshuffledChannels.length} channels, index reset to 0`);
   }
 }

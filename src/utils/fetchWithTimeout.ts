@@ -263,7 +263,7 @@ export async function fetchWithTimeout(
 
     // Main retry loop
     let lastError: Error | null = null;
-
+    console.log(`Fetching URL: `, url);
     for (let attempt = 0; attempt <= retryConfig.maxRetries; attempt++) {
         // Create controller for this attempt
         const controller = new AbortController();

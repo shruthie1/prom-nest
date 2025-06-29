@@ -14,6 +14,210 @@
           "App"
         ]
       }
+    },
+    "/promotion/status": {
+      "get": {
+        "operationId": "PromotionController_getPromotionStatus",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Promotion"
+        ]
+      }
+    },
+    "/promotion/health": {
+      "get": {
+        "operationId": "PromotionController_getSystemHealth",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Promotion"
+        ]
+      }
+    },
+    "/promotion/mobile/{mobile}/stats": {
+      "get": {
+        "operationId": "PromotionController_getMobileStats",
+        "parameters": [
+          {
+            "name": "mobile",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Promotion"
+        ]
+      }
+    },
+    "/promotion/start": {
+      "post": {
+        "operationId": "PromotionController_startPromotion",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Promotion"
+        ]
+      }
+    },
+    "/promotion/stop": {
+      "post": {
+        "operationId": "PromotionController_stopPromotion",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Promotion"
+        ]
+      }
+    },
+    "/promotion/restart": {
+      "post": {
+        "operationId": "PromotionController_restartPromotion",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Promotion"
+        ]
+      }
+    },
+    "/promotion/sync": {
+      "post": {
+        "operationId": "PromotionController_syncWithConnectionManager",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Promotion"
+        ]
+      }
+    },
+    "/promotion/mobile/{mobile}/reset": {
+      "post": {
+        "operationId": "PromotionController_resetMobilePromotion",
+        "parameters": [
+          {
+            "name": "mobile",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Promotion"
+        ]
+      }
+    },
+    "/promotion/save": {
+      "post": {
+        "operationId": "PromotionController_saveResults",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Promotion"
+        ]
+      }
+    },
+    "/promotion/load": {
+      "post": {
+        "operationId": "PromotionController_loadResults",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Promotion"
+        ]
+      }
+    },
+    "/promotion/mobile/{mobile}/add": {
+      "post": {
+        "operationId": "PromotionController_addNewClient",
+        "parameters": [
+          {
+            "name": "mobile",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Promotion"
+        ]
+      }
+    },
+    "/promotion/mobile/{mobile}": {
+      "delete": {
+        "operationId": "PromotionController_removeClient",
+        "parameters": [
+          {
+            "name": "mobile",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Promotion"
+        ]
+      }
     }
   },
   "info": {

@@ -1,69 +1,7 @@
 import { TelegramClient } from "telegram";
-import { MessageQueueItem, PromotionState } from "../interfaces/promotion.interfaces";
+import { MessageQueueItem } from "../interfaces/promotion.interfaces";
 import { fetchWithTimeout } from "../../../utils/fetchWithTimeout";
 import { ppplbot } from "../../../utils/logbots";
-
-// Memory and performance optimization constants
-const MAX_QUEUE_SIZE = 1000;
-const MAX_CONCURRENT_CHECKS = 5;
-const MESSAGE_CHECK_DELAY = 10000;
-
-/**
- * Check queued messages for existence and handle accordingly
- */
-export async function checkQueuedMessages(
-    client: TelegramClient,
-    state: PromotionState,
-    mobile: string
-): Promise<void> {
-    if (state.messageQueue.length === 0) return;
-
-    const batchSize = Math.min(50, state.messageQueue.length);
-    const now = Date.now();
-
-    // Pre-allocate array with known size to avoid reallocation
-    const readyMessages: MessageQueueItem[] = [];
-    const readyIndices = new Set<number>();
-
-    // Process in-place without creating slice copy
-    for (let i = 0; i < Math.min(batchSize, state.messageQueue.length); i++) {
-        const item = state.messageQueue[i];
-        if ((now - item.timestamp) >= MESSAGE_CHECK_DELAY) {
-            readyMessages.push(item);
-            readyIndices.add(i);
-        }
-    }
-
-    if (readyMessages.length === 0) return;
-
-    console.log(`[${mobile}] Checking ${readyMessages.length} messages in queue`);
-
-    // Process messages in parallel with controlled concurrency
-    const processedIndices = new Set<number>();
-
-    for (let i = 0; i < readyMessages.length; i += MAX_CONCURRENT_CHECKS) {
-        const batch = readyMessages.slice(i, i + MAX_CONCURRENT_CHECKS);
-        const batchIndices = Array.from(readyIndices).slice(i, i + MAX_CONCURRENT_CHECKS);
-
-        const promises = batch.map(async (messageItem, batchIndex) => {
-            try {
-                await checkMessageExist(client, messageItem, mobile);
-                processedIndices.add(batchIndices[batchIndex]);
-            } catch (error) {
-                console.error(`[${mobile}] Error checking message ${messageItem.messageId}:`, error);
-                processedIndices.add(batchIndices[batchIndex]);
-            }
-        });
-
-        await Promise.all(promises);
-    }
-
-    // Remove processed items efficiently (reverse order to maintain indices)
-    const sortedIndices = Array.from(processedIndices).sort((a, b) => b - a);
-    for (const index of sortedIndices) {
-        state.messageQueue.splice(index, 1);
-    }
-}
 
 /**
  * Check if a specific message exists in a channel
@@ -126,20 +64,4 @@ async function handleExistingMessage(channelId: string, messageIndex: string, me
     } else {
         console.log(`[${mobile}] No message index provided for channel ${channelId}`);
     }
-}
-
-/**
- * Add a message to the queue for later checking
- */
-export function addToMessageQueue(state: PromotionState, item: MessageQueueItem, mobile: string): void {
-    // Implement queue size limit to prevent memory issues
-    if (state.messageQueue.length >= MAX_QUEUE_SIZE) {
-        // Remove oldest items (FIFO) when queue is full
-        const removeCount = Math.floor(MAX_QUEUE_SIZE * 0.1); // Remove 10% when full
-        state.messageQueue.splice(0, removeCount);
-        console.warn(`[${mobile}] Queue size limit reached, removed ${removeCount} oldest items`);
-    }
-
-    state.messageQueue.push(item);
-    console.log(`[${mobile}] Added message ${item.messageId} to queue for channel ${item.channelId} (queue size: ${state.messageQueue.length})`);
 }

@@ -1,7 +1,7 @@
 import { TelegramClient } from 'telegram';
 import { ClientInfo } from '../../../utils/shared.interfaces';
 
-export interface ManagedTelegramClient {
+export interface ActiveConnection {
   mobile: string;
   telegramClient: TelegramClient;
   clientInfo: ClientInfo;
@@ -24,7 +24,7 @@ export interface RotationStatus {
   activeSlotsUsed: number;
   maxActiveSlots: number;
   lastRotationTime: Date;
-  totalManagedMobiles: number;
+  totalActiveConnections: number;
   healthyMobiles: number;
   rotationHistory: { timestamp: Date; selectedMobiles: string[] }[];
   isRandomized: boolean;
@@ -45,8 +45,8 @@ export interface ServiceHealth {
 }
 
 export interface ServiceStatistics {
-  totalManagedClients: number;
-  activeClients: number;
+  totalActiveConnections: number;
+  activeConnections: number;
   connectedClients: number;
   failedClients: number;
   rotationStats: {
@@ -80,7 +80,7 @@ export interface ConnectionInfo {
 export interface ClientWithDetails {
   client: TelegramClient | null;
   error?: string;
-  managedClient?: ManagedTelegramClient;
+  activeConnection?: ActiveConnection;
 }
 
 export interface HealthCheckResult {

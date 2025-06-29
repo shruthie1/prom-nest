@@ -7,7 +7,6 @@ export async function getChannelInfo(
   channelId: string
 ): Promise<IChannel | null> {
   console.log(`Getting channel info for ${channelId}`);
-  
   try {
     // Note: In actual implementation, you'd need to inject the database service
     // const db = this.userDataService.getInstance();

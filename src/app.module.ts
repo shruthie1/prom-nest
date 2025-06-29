@@ -1,10 +1,11 @@
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
 import { AppController } from './app.controller';
 import { ClientModule } from './components/clients/client.module';
 import { TelegramModule } from './components/telegram/telegram.module';
 import { ConnectionManagerModule } from './components/connection-manager/connection-manager.module';
+import { PromotionModule } from './components/promotions/promotion.module';
 import { UsersModule } from './components/users/users.module';
 import { MemoryCleanerService } from './memory-cleanup.service';
 
@@ -29,7 +30,8 @@ import { MemoryCleanerService } from './memory-cleanup.service';
     // Feature modules
     ClientModule,
     TelegramModule,
-    ConnectionManagerModule,
+    forwardRef(() => ConnectionManagerModule),
+    forwardRef(() => PromotionModule),
     UsersModule,
   ],
   controllers: [AppController],

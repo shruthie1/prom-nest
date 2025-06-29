@@ -8,12 +8,12 @@ export class ConnectionManagerConfig {
   static readonly DISCONNECT_TIMEOUT = 5000; // 5 seconds
 
   // Rotation constants
-  static readonly ROTATION_INTERVAL = 4 * 60 * 60 * 1000; // 4 hours
-  static readonly ACTIVE_SLOTS = 4;
+  static readonly ROTATION_INTERVAL = 20000//4 * 60 * 60 * 1000; // 4 hours
+  static readonly ACTIVE_SLOTS = 2;
 
   // Randomization settings for anti-detection
-  static readonly MIN_ROTATION_INTERVAL = 3 * 60 * 60 * 1000; // 3 hours minimum
-  static readonly MAX_ROTATION_INTERVAL = 6 * 60 * 60 * 1000; // 6 hours maximum
+  static readonly MIN_ROTATION_INTERVAL = 30000//3 * 60 * 60 * 1000; // 3 hours minimum
+  static readonly MAX_ROTATION_INTERVAL =  60000//6 * 60 * 60 * 1000; // 6 hours maximum
   static readonly ROTATION_JITTER_PERCENTAGE = 0.3; // 30% jitter
   static readonly MIN_ACTIVE_CHANGE_PERCENTAGE = 0.3; // Change at least 30% of active mobiles
 
